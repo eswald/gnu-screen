@@ -1,0 +1,135 @@
+A quick hack to create a "system" command, which executes an arbitrary
+command with input and output set to /dev/null.  This has not been
+extensively tested and may be extremely dangerous.  I also have yet to
+document the new command anywhere, and the sysexec function could be
+refactored into the ForkWindow function from which it was copied.
+
+Two gotchas in the current code:
+ * Redirection symbols appear to be ignored, unless wrapped in sh -c.
+ * The current working directory is that of screen, not the window.
+   (On the other hand, the command works without a current window.)
+
+Requested by Miciah of the ELinks dev team.
+
+ -- Eric Wald
+
+diff -ur screen-4.0.2/comm.c screen-4.0.2-system/comm.c
+--- screen-4.0.2/comm.c	2003-09-08 08:25:08.000000000 -0600
++++ screen-4.0.2-system/comm.c	2006-01-26 13:29:22.000000000 -0700
+@@ -293,6 +293,7 @@
+ #ifdef BSDJOBS
+   { "suspend",		NEED_DISPLAY|ARGS_0 },
+ #endif
++  { "system", 		ARGS_1|ARGS_ORMORE },
+   { "term",		ARGS_1 },
+   { "termcap",		ARGS_23 },
+   { "termcapinfo",	ARGS_23 },
+diff -ur screen-4.0.2/extern.h screen-4.0.2-system/extern.h
+--- screen-4.0.2/extern.h	2003-08-22 06:27:57.000000000 -0600
++++ screen-4.0.2-system/extern.h	2006-01-26 13:31:20.000000000 -0700
+@@ -146,6 +146,7 @@
+ #ifdef ZMODEM
+ extern void  zmodem_abort __P((struct win *, struct display *));
+ #endif
++extern int   sysexec __P((char **));
+ extern void  execvpe __P((char *, char **, char **));
+ 
+ /* utmp.c */
+diff -ur screen-4.0.2/window.c screen-4.0.2-system/window.c
+--- screen-4.0.2/window.c	2003-12-05 06:45:41.000000000 -0700
++++ screen-4.0.2-system/window.c	2006-01-26 13:36:19.000000000 -0700
+@@ -1433,6 +1433,94 @@
+     errno = EACCES;
+ }
+ 
++int
++sysexec(args)
++char **args;
++{
++  int pid;
++  char tebuf[25];
++  char ebuf[10];
++  char shellbuf[7 + MAXPATHLEN];
++  char *proc;
++
++  debug("forking...\n");
++  proc = *args;
++  if (proc == 0)
++    {
++      args = ShellArgs;
++      proc = *args;
++    }
++  fflush(stdout);
++  fflush(stderr);
++  switch (pid = fork())
++    {
++    case -1:
++      Msg(errno, "fork");
++      break;
++    case 0:
++      signal(SIGHUP, SIG_DFL);
++      signal(SIGINT, SIG_DFL);
++      signal(SIGQUIT, SIG_DFL);
++      signal(SIGTERM, SIG_DFL);
++#ifdef BSDJOBS
++      signal(SIGTTIN, SIG_DFL);
++      signal(SIGTTOU, SIG_DFL);
++#endif
++#ifdef SIGPIPE
++      signal(SIGPIPE, SIG_DFL);
++#endif
++#ifdef SIGXFSZ
++      signal(SIGXFSZ, SIG_DFL);
++#endif
++
++      displays = 0;		/* beware of Panic() */
++      if (setgid(real_gid) || setuid(real_uid))
++	Panic(errno, "Setuid/gid");
++      eff_uid = real_uid;
++      eff_gid = real_gid;
++
++      if (display)
++	{
++	  brktty(D_userfd);
++	  freetty();
++	}
++      else
++	brktty(-1);
++#ifdef DEBUG
++      if (dfp && dfp != stderr)
++	fclose(dfp);
++      if (dfp)	/* do not produce child debug, when debug is "off" */
++	{
++	  char buf[256];
++
++	  sprintf(buf, "%s/screen.child", DEBUGDIR);
++	  if ((dfp = fopen(buf, "a")) == 0)
++	    dfp = stderr;
++	  else
++	    (void) chmod(buf, 0666);
++	}
++      debug1("=== sysexec: pid %d\n", (int)getpid());
++#endif
++      strcpy(shellbuf, "SHELL=");
++      strncpy(shellbuf + 6, ShellProg + (*ShellProg == '-'), sizeof(shellbuf) - 7);
++      shellbuf[sizeof(shellbuf) - 1] = 0;
++      NewEnv[4] = shellbuf;
++      debug1("sysexec: NewEnv[4] = '%s'\n", shellbuf);
++
++      if (*proc == '-')
++	proc++;
++      if (!*proc)
++	proc = DefaultShell;
++      debug1("calling execvpe %s\n", proc);
++      execvpe(proc, args, NewEnv);
++      debug1("exec error: %d\n", errno);
++      Panic(errno, "Cannot exec '%s'", proc);
++    default:
++      break;
++    }
++  return pid;
++}
++
+ #ifdef PSEUDOS
+ 
+ int

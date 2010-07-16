@@ -1,0 +1,206 @@
+This patch adds a "firstline" option to screen's "hardstatus" command,
+which places the status line on the top line of the terminal when no
+hardware status line is available or when "always" is specified
+(just like the "lastline" option, but above everything else).
+
+Messages are still displayed at the bottom of the screen, and captions
+at the bottom of each window.
+
+To be honest, I'm not sure if everything in the ShowHStatus function is
+necessary, but it works.
+
+Note: The first version of this file had a bug which would show up after
+an :only call.
+
+ -- Eric Wald
+
+diff -ur screen-4.0.2/display.c screen-4.0.2-firstline/display.c
+--- screen-4.0.2/display.c	2003-12-05 06:45:41.000000000 -0700
++++ screen-4.0.2-firstline/display.c	2006-01-19 16:03:06.000000000 -0700
+@@ -423,10 +423,10 @@
+     return -1;
+   cv->c_xs      = 0;
+   cv->c_xe      = D_width - 1;
+-  cv->c_ys      = 0;
++  cv->c_ys      = (D_has_hstatus == HSTATUS_TOPLINE);
+   cv->c_ye      = D_height - 1 - (D_has_hstatus == HSTATUS_LASTLINE) - captionalways;
+   cv->c_xoff    = 0;
+-  cv->c_yoff    = 0;
++  cv->c_yoff    = (D_has_hstatus == HSTATUS_TOPLINE);
+   cv->c_next = 0;
+   cv->c_display = display;
+   cv->c_vplist = 0;
+@@ -485,7 +485,7 @@
+   for (cv = D_cvlist, j = 0; cv; cv = cv->c_next)
+     j++;
+   j++;	/* new canvas */
+-  h = D_height - (D_has_hstatus == HSTATUS_LASTLINE);
++  h = D_height - HSTATUS_HEIGHT;
+   if (h / j <= 1)
+     return -1;
+ 
+@@ -548,7 +548,7 @@
+   struct canvas *cv, **cvpp;
+   int did = 0;
+ 
+-  h = D_height - (D_has_hstatus == HSTATUS_LASTLINE);
++  h = D_height - HSTATUS_HEIGHT;
+   for (cv = D_cvlist, j = 0; cv; cv = cv->c_next)
+     j++;
+   if (j == 1)
+@@ -592,9 +592,9 @@
+     {
+       if (cv == mycv)
+         {
+-	  cv->c_ys = 0;
++	  cv->c_ys = (D_has_hstatus == HSTATUS_TOPLINE);
+ 	  cv->c_ye = D_height - 1 - (D_has_hstatus == HSTATUS_LASTLINE) - captionalways;
+-	  cv->c_yoff = 0;
++	  cv->c_yoff = (D_has_hstatus == HSTATUS_TOPLINE);
+ 	  cvpp = &cv->c_next;
+         }
+       else
+@@ -2274,7 +2274,7 @@
+   D_status_len = t - msg;
+   D_status_lastx = D_x;
+   D_status_lasty = D_y;
+-  if (!use_hardstatus || D_has_hstatus == HSTATUS_IGNORE || D_has_hstatus == HSTATUS_MESSAGE)
++  if (!use_hardstatus || D_has_hstatus == HSTATUS_IGNORE || D_has_hstatus == HSTATUS_MESSAGE || D_has_hstatus == HSTATUS_TOPLINE)
+     {
+       D_status = STATUS_ON_WIN;
+       debug1("using STATLINE %d\n", STATLINE);
+@@ -2435,6 +2435,30 @@
+       D_hstatus = *str ? 1 : 0;
+       SetRendition(&mchar_null);
+     }
++  else if (str && *str && D_has_hstatus == HSTATUS_TOPLINE)
++    {
++      debug("ShowHStatus: using first line\n");
++      ox = D_x;
++      oy = D_y;
++      str = str ? str : "";
++      l = strlen(str);
++      if (l > D_width)
++	l = D_width;
++      GotoPos(0, 0);
++      SetRendition(D_cvlist == 0 || D_cvlist->c_next ? &mchar_null: &mchar_so);
++      if (!PutWinMsg(str, 0, l))
++        for (i = 0; i < l; i++)
++	  PUTCHARLP(str[i]);
++      if (D_cvlist && !D_cvlist->c_next)
++        while (l++ < D_width)
++	  PUTCHARLP(' ');
++      if (l < D_width)
++        ClearArea(l, 0, l, D_width - 1, D_width - 1, 0, 0, 0);
++      if (ox != -1 && oy != -1)
++	GotoPos(ox, oy);
++      D_hstatus = *str ? 1 : 0;
++      SetRendition(&mchar_null);
++    }
+   else if (str && *str && D_has_hstatus == HSTATUS_MESSAGE)
+     {
+       debug("ShowHStatus: using message\n");
+@@ -2608,6 +2632,11 @@
+       RefreshHStatus();
+       return;
+     }
++  else if (y == 0 && D_has_hstatus == HSTATUS_TOPLINE)
++    {
++      RefreshHStatus();
++      return;
++    }
+ 
+   for (cv = display->d_cvlist; cv; cv = cv->c_next)
+     if (y == cv->c_ye + 1)
+diff -ur screen-4.0.2/display.h screen-4.0.2-firstline/display.h
+--- screen-4.0.2/display.h	2003-07-01 08:01:42.000000000 -0600
++++ screen-4.0.2-firstline/display.h	2006-01-19 15:09:21.000000000 -0700
+@@ -343,3 +343,7 @@
+ #define HSTATUS_MESSAGE		2
+ #define HSTATUS_HS		3
+ #define HSTATUS_ALWAYS		(1<<2)
++#define HSTATUS_TOPLINE		(1<<3)
++
++#define HSTATUS_HEIGHT		((D_has_hstatus == HSTATUS_LASTLINE) || \
++				 (D_has_hstatus == HSTATUS_TOPLINE))
+diff -ur screen-4.0.2/doc/screen.1 screen-4.0.2-firstline/doc/screen.1
+--- screen-4.0.2/doc/screen.1	2003-12-05 06:51:57.000000000 -0700
++++ screen-4.0.2-firstline/doc/screen.1	2006-01-19 19:53:25.000000000 -0700
+@@ -1879,7 +1879,7 @@
+ .ne 3
+ .BR "hardstatus " [ on | off ]
+ .br
+-.BR "hardstatus \fR[\fBalways\fR]\fBlastline" | message | ignore
++.BR "hardstatus \fR[\fBalways\fR]\fBlastline" | firstline | message | ignore
+ .RI [ string ]
+ .br
+ .B "hardstatus string"
+@@ -1903,7 +1903,8 @@
+ .I screen 
+ will reserve the last line of the
+ display for
+-the hardstatus. \*Qmessage\*U uses 
++the hardstatus; similarly, \*Qfirstline\*U reserves the first line
++of the display. \*Qmessage\*U uses 
+ .I screen's
+ message mechanism and
+ \*Qignore\*U tells 
+diff -ur screen-4.0.2/patchlevel.h screen-4.0.2-firstline/patchlevel.h
+--- screen-4.0.2/patchlevel.h	2003-12-05 06:48:34.000000000 -0700
++++ screen-4.0.2-firstline/patchlevel.h	2006-01-19 16:20:22.000000000 -0700
+@@ -519,11 +519,12 @@
+  * 05.12.2003  4.00.02 fixed a bug in the ansi parser. fixed execs
+  *                     on ttys. fixed hardstatus line on blanked screen.
+  *                     -- DISTRIBUTED
++ * 19.01.2005  4.00.03 added firstline option to the hardstatus command
+  */
+ 
+ #define ORIGIN "FAU"
+ #define REV 4
+ #define VERS 0
+ #define PATCHLEVEL 2
+-#define DATE "5-Dec-03"
++#define DATE "1-Feb-05"
+ #define STATE ""
+diff -ur screen-4.0.2/process.c screen-4.0.2-firstline/process.c
+--- screen-4.0.2/process.c	2003-09-18 06:53:54.000000000 -0600
++++ screen-4.0.2-firstline/process.c	2006-01-19 14:55:21.000000000 -0700
+@@ -2612,6 +2612,8 @@
+ 	    s += 6;
+ 	  if (!strcmp(s, "lastline"))
+ 	    new_use = HSTATUS_LASTLINE;
++	  else if (!strcmp(s, "firstline"))
++	    new_use = HSTATUS_TOPLINE;
+ 	  else if (!strcmp(s, "ignore"))
+ 	    new_use = HSTATUS_IGNORE;
+ 	  else if (!strcmp(s, "message"))
+@@ -2628,7 +2630,7 @@
+ 	    }
+ 	  else
+ 	    {
+-	      Msg(0, "%s: usage: hardstatus [always]lastline|ignore|message|string [string]", rc_name);
++	      Msg(0, "%s: usage: hardstatus [always]lastline|firstline|ignore|message|string [string]", rc_name);
+ 	      break;
+ 	    }
+ 	  if (new_use != -1)
+diff -ur screen-4.0.2/resize.c screen-4.0.2-firstline/resize.c
+--- screen-4.0.2/resize.c	2003-09-08 08:26:31.000000000 -0600
++++ screen-4.0.2-firstline/resize.c	2006-01-19 15:11:22.000000000 -0700
+@@ -158,15 +158,15 @@
+    *  if canvas doesn't fit anymore, throw it off.
+    *  (ATTENTION: cvlist must be sorted!)
+    */
+-  y = 0;
+   h = he;
+-  if (D_has_hstatus == HSTATUS_LASTLINE)
++  if (HSTATUS_HEIGHT)
+     {
+       if (h > 1)
+         h--;
+       else
+         D_has_hstatus = 0;	/* sorry */
+     }
++  y = (D_has_hstatus == HSTATUS_TOPLINE);
+   for (cvpp = &D_cvlist; (cv = *cvpp); )
+     {
+       if (h < 2 && cvpp != &D_cvlist)

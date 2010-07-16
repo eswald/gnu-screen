@@ -1,0 +1,339 @@
+Allows windows to be hidden, so they are avoided with the next and
+previous window commands.  Modified from a patch by Ben Kibbey; see
+http://lists.gnu.org/archive/html/screen-devel/2006-03/msg00001.html
+
+diff -aur screen-4.0.2/comm.c screen-4.0.2-hide/comm.c
+--- screen-4.0.2/comm.c	2003-09-08 08:25:08.000000000 -0600
++++ screen-4.0.2-hide/comm.c	2006-03-04 09:56:24.000000000 -0700
+@@ -190,6 +190,7 @@
+   { "hardstatus",	ARGS_012 },
+   { "height",		ARGS_0123 },
+   { "help",		NEED_LAYER|ARGS_02 },
++  { "hide",		NEED_FORE|ARGS_01 },
+ #ifdef COPY_PASTE
+   { "history",		NEED_DISPLAY|NEED_FORE|ARGS_0 },
+ #endif
+diff -aur screen-4.0.2/doc/screen.1 screen-4.0.2-hide/doc/screen.1
+--- screen-4.0.2/doc/screen.1	2003-12-05 06:51:57.000000000 -0700
++++ screen-4.0.2-hide/doc/screen.1	2006-03-04 09:57:10.000000000 -0700
+@@ -1958,6 +1959,12 @@
+ See also \*QDEFAULT KEY BINDINGS\*U section.
+ .sp
+ .ne 3
++.B hide [WindowID]
++.PP
++Toggles hiding of the specified window. If no window is specified the current
++window will be toggled.
++.sp
++.ne 3
+ .B history
+ .PP
+ Usually users work with a shell that allows easy access to previous commands.
+@@ -3018,6 +3025,7 @@
+ is marked with an `@';
+ a window which has output logging turned on is marked with `(L)'; 
+ windows occupied by other users are marked with `&';
++hidden windows are marked with `^';
+ windows in the zombie state are marked with `Z'.
+ If this list is too long to fit on the terminal's status line only the
+ portion around the current window is displayed.
+diff -aur screen-4.0.2/doc/screen.texinfo screen-4.0.2-hide/doc/screen.texinfo
+--- screen-4.0.2/doc/screen.texinfo	2003-12-05 06:51:46.000000000 -0700
++++ screen-4.0.2-hide/doc/screen.texinfo	2006-03-04 09:57:29.000000000 -0700
+@@ -972,6 +972,8 @@
+ Set display height.  @xref{Window Size}.
+ @item help [-c @var{class}]
+ Display current key bindings.  @xref{Help}.
++@item hide [@var{n}]
++Toggle hiding of a window.
+ @item history
+ Find previous command beginning @dots{}.  @xref{History}.
+ @item hstatus @var{status}
+@@ -1410,7 +1412,7 @@
+ @kindex C-n
+ @deffn Command next
+ (@kbd{C-a @key{SPC}}, @kbd{C-a n}, @kbd{C-a C-n})@*
+-Switch to the next window.  This command can be used repeatedly to
++Switch to the next unhidden window.  This command can be used repeatedly to
+ cycle through the list of windows.  (On some terminals, C-@key{SPC}
+ generates a NUL character, so you must release the control key before
+ pressing space.)
+@@ -1420,7 +1422,7 @@
+ @kindex C-p
+ @deffn Command prev
+ (@kbd{C-a p}, @kbd{C-a C-p})@*
+-Switch to the previous window (the opposite of @kbd{C-a n}).
++Switch to the previous unhidden window (the opposite of @kbd{C-a n}).
+ @end deffn
+ 
+ @node Other Window, Select, Next and Previous, Selecting
+@@ -1428,7 +1430,7 @@
+ @kindex C-a
+ @deffn Command other
+ (@kbd{C-a C-a})@*
+-Switch to the last window displayed.  Note that this command
++Switch to the last unhidden window displayed.  Note that this command
+ defaults to the command character typed twice, unless overridden.
+ For instance, if you use the option @samp{-e]x}, 
+ this command becomes @kbd{]]} (@pxref{Command Character}).
+@@ -2184,6 +2186,7 @@
+ a window which has output logging turned on is marked with @samp{(L)};
+ windows occupied by other users are marked with @samp{&}
+ or @samp{&&} if the window is shared by other users;
++hidden windows are marked with @samp{^};
+ windows in the zombie state are marked with @samp{Z}. 
+ 
+ If this list is too long to fit on the terminal's status line only the
+@@ -4322,6 +4325,7 @@
+ * Nethack::                     Use @code{nethack}-like error messages.
+ * Nonblock::			Disable flow-control to a display.
+ * Number::                      Change the current window's number.
++* Hide::                        Toggle a window's hidden status.
+ * Silence::			Notify on inactivity.
+ * Time::                        Display the time and load average.
+ * Verbose::                     Display window creation commands.
+@@ -4465,7 +4469,7 @@
+ displays is changed. Initial setting is @code{off}.
+ @end deffn
+ 
+-@node Number, Silence, Nonblock, Miscellaneous
++@node Number, Hide, Nonblock, Miscellaneous
+ @section Number
+ @kindex N
+ @deffn Command number [@var{n}]
+@@ -4475,7 +4479,17 @@
+ specified, the current window number (and title) is shown.
+ @end deffn
+ 
+-@node Silence, Time, Number, Miscellaneous
++@node Hide, Silence, Number, Miscellaneous
++@section Hide
++@deffn Command hide [@var{window}]
++(none)@*
++Toggles hiding of the specified window @xref{Selecting}. If no window is
++specified then the current window will be toggled. When a window is hidden the
++commands @code{next}, @code{prev} and @code{other} will skip the window and
++the window will have a status flag of @samp{^}.
++@end deffn
++
++@node Silence, Time, Hide, Miscellaneous
+ @section Silence
+ @deffn Command silence [@var{state}|@var{sec}]
+ (none)@*
+diff -aur screen-4.0.2/nethack.c screen-4.0.2-hide/nethack.c
+--- screen-4.0.2/nethack.c	2003-09-08 08:26:09.000000000 -0600
++++ screen-4.0.2-hide/nethack.c	2006-03-07 15:45:25.000000000 -0700
+@@ -47,6 +47,10 @@
+ 	"You escaped the dungeon."},
+ {"Filter removed.",
+ 	"You have a sad feeling for a moment..."},
++{"Window %d (%s) is now hidden",
++	"Window %d (%s) takes on a strange transparency..."},
++{"Window %d (%s) unhidden",
++	"You can no longer see through window %d (%s)."},
+ {"Window %d (%s) killed.",
+ 	"You destroy poor window %d (%s)."},
+ {"Window %d (%s) is now being monitored for all activity.",
+diff -aur screen-4.0.2/process.c screen-4.0.2-hide/process.c
+--- screen-4.0.2/process.c	2003-09-18 06:53:54.000000000 -0600
++++ screen-4.0.2-hide/process.c	2006-04-13 11:01:28.000000000 -0600
+@@ -1018,6 +1018,49 @@
+   return i;
+ }
+ 
++void
++HideWindow(p)
++struct win *p;
++{
++  int q;
++  int n = p ? p->w_number : -1;
++  struct win **pp;
++
++  if (!p)
++    {
++      ShowWindows(-1);
++      return;
++    }
++
++  // Valid window?
++  for (q = -1, pp = wtab; pp != wtab + MAXWIN; pp++)
++  {
++    struct win *w = *pp;
++
++    if (w && w->w_number == n)
++    {
++      q = n;
++      break;
++    }
++  }
++  n = q;
++  if (n < 0 || n >= MAXWIN)
++  {
++    ShowWindows(-1);
++    return;
++  }
++  if (p->w_hide)
++    {
++      p->w_hide = 0;
++      Msg(0, "Window %d (%s) unhidden", p->w_number, p->w_title);
++    }
++  else
++    {
++      p->w_hide = 1;
++      Msg(0, "Window %d (%s) is now hidden", p->w_number, p->w_title);
++    }
++}
++
+ /*ARGSUSED*/
+ void
+ DoAction(act, key)
+@@ -1073,6 +1116,20 @@
+   msgok = display && !*rc_name;
+   switch(nr)
+     {
++    case RC_HIDE:
++      if (!*args || (args[0][0] == '.' && !args[0][1]))
++        {
++	  if (!fore)
++	    {
++	      Msg(0, "hide . needs a window");
++	      break;
++	    }
++	  n = fore->w_number;
++	}
++      else if (ParseWinNum(act, &n) < 0)
++	break;
++      HideWindow(wtab[n]);
++      break;
+     case RC_SELECT:
+       if (!*args)
+         InputSelect();
+@@ -4607,8 +4666,13 @@
+ 
+   for (pp = wtab + n + 1; pp != wtab + n; pp++)
+     {
++      struct win *p;
++
+       if (pp == wtab + MAXWIN)
+ 	pp = wtab;
++      p = *pp;
++      if (p && p->w_hide)
++	continue;
+       if (*pp)
+ 	break;
+     }
+@@ -4623,8 +4687,13 @@
+ 
+   for (pp = wtab + n - 1; pp != wtab + n; pp--)
+     {
++      struct win *p;
++
+       if (pp < wtab)
+ 	pp = wtab + MAXWIN - 1;
++      p = *pp;
++      if (p && p->w_hide)
++	continue;
+       if (*pp)
+ 	break;
+     }
+@@ -4635,8 +4704,15 @@
+ MoreWindows()
+ {
+   char *m = "No other window.";
+-  if (windows && (fore == 0 || windows->w_next))
+-    return 1;
++  struct win **pp, *p;
++  int n = fore ? fore->w_number : -1;
++
++  for (pp = wtab; pp != wtab + MAXWIN; pp++) {
++    p = *pp;
++    if (fore && windows && p && p->w_number != n && p->w_hide == 0)
++      return 1;
++  }
++
+   if (fore == 0)
+     {
+       Msg(0, "No window available");
+@@ -4754,7 +4830,21 @@
+ 	ss = s;
+       if ((p = *pp) == 0)
+ 	continue;
+-      if ((flags & 1) && display && p == D_fore)
++      if (display && p == D_fore)
++	{
++	  if (flags & 8)
++	    {
++	      if (s > buf)
++	        {
++	          *s++ = ' ';
++	          *s++ = ' ';
++	        }
++	      break;
++	    }
++	  if (flags & 1)
++	    continue;
++	}
++      else if ((flags & 2) && p->w_hide)
+ 	continue;
+ 
+       cmd = p->w_title;
+@@ -4762,7 +4852,16 @@
+       if (l > 20)
+         l = 20;
+       if (s - buf + l > len - 24)
+-	break;
++        {
++	  if (flags & 8)
++	    {
++	      char *c = s + l - len + 24;
++	      memmove(buf, c, s - c);
++	      s -= c - buf;
++	    }
++	  else
++	    break;
++	}
+       if (s > buf || (flags & 4))
+ 	{
+ 	  *s++ = ' ';
+@@ -4812,6 +4911,8 @@
+     *s++ = '@';
+   if (p->w_bell == BELL_DONE)
+     *s++ = '!';
++  if (p->w_hide) 
++    *s++ = '^';
+ #ifdef UTMPOK
+   if (p->w_slot != (slot_t) 0 && p->w_slot != (slot_t) -1)
+     *s++ = '$';
+diff -aur screen-4.0.2/screen.c screen-4.0.2-hide/screen.c
+--- screen-4.0.2/screen.c	2003-09-08 08:26:41.000000000 -0600
++++ screen-4.0.2-hide/screen.c	2006-03-07 16:32:35.000000000 -0700
+@@ -2521,16 +2521,14 @@
+ 	case 'W':
+ 	  {
+ 	    struct win *oldfore = 0;
+-	    char *ss;
+ 
+ 	    if (display)
+ 	      {
+ 		oldfore = D_fore;
+ 		D_fore = win;
+ 	      }
+-	    ss = AddWindows(p, l - 1, (*s == 'w' ? 0 : 1) | (longflg ? 0 : 2) | (plusflg ? 4 : 0), win ? win->w_number : -1);
+-	    if (minusflg)
+-	       *ss = 0;
++	    AddWindows(p, l - 1, (*s == 'w' ? 0 : 1) | (longflg ? 0 : 2) |
++	      (plusflg ? 4 : 0) | (minusflg ? 8 : 0), win ? win->w_number : -1);
+ 	    if (display)
+ 	      D_fore = oldfore;
+ 	  }
+diff -aur screen-4.0.2/window.h screen-4.0.2-hide/window.h
+--- screen-4.0.2/window.h	2003-08-21 08:57:30.000000000 -0600
++++ screen-4.0.2-hide/window.h	2006-03-04 09:56:24.000000000 -0700
+@@ -185,6 +185,7 @@
+   int	 w_SavedCharsetR;
+   int	 w_SavedCharsets[4];
+ #endif
++  int	 w_hide;
+   int	 w_top, w_bot;		/* scrollregion */
+   int	 w_wrap;		/* autowrap */
+   int	 w_origin;		/* origin mode */
